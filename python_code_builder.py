@@ -33,7 +33,43 @@ class Constant(Expression):
         self.value = value  # type: Union[int, float, Text, str, bytes, Ellipsis, None]
 
     def to_source(self):  # type: () -> str
-        return '(%r)' % (self.value,)
+        return repr(self.value)
+
+
+class Slice(Expression):
+    def __init__(
+            self,
+            start=None,  # type: Optional[Expression]
+            stop=None,  # type: Optional[Expression]
+            step=None,  # type: Optional[Expression]
+    ):
+        self.start = start  # type: Optional[int]
+        self.stop = stop  # type: Optional[int]
+        self.step = step  # type: Optional[int]
+
+    def to_source(self):  # type: () -> str
+        if self.start is not None:
+            if self.stop is not None:
+                if self.step is not None:
+                    return '%s:%s:%s' % (self.start.to_source(), self.stop.to_source(), self.step.to_source())
+                else:
+                    return '%s:%s' % (self.start.to_source(), self.stop.to_source())
+            else:
+                if self.step is not None:
+                    return '%s::%s' % (self.start.to_source(), self.step.to_source())
+                else:
+                    return '%s:' % (self.start.to_source(),)
+        else:
+            if self.stop is not None:
+                if self.step is not None:
+                    return ':%s:%s' % (self.stop.to_source(), self.step.to_source())
+                else:
+                    return ':%s' % (self.stop.to_source(),)
+            else:
+                if self.step is not None:
+                    return '::%s' % (self.step.to_source(),)
+                else:
+                    return ':'
 
 
 class LoadName(Expression):
@@ -159,6 +195,27 @@ class GetItem(Expression):
 
     def to_source(self):  # type: () -> str
         return '%s[%s]' % (self.expression.to_source(), self.key.to_source())
+
+
+class Tuple(Expression):
+    def __init__(
+            self,
+            elements,  # type: Sequence[Expression]
+    ):
+        self.elements = elements  # type: Sequence[Expression]
+
+    def names_read(self):
+        for element in self.elements:
+            for name in element.names_read():
+                yield name
+
+    def to_source(self):  # type: () -> str
+        if not self.elements:
+            return 'tuple()'
+        elif len(self.elements) == 1:
+            return '(%s,)' % (self.elements[0].to_source(),)
+        else:
+            return '(%s)' % (', '.join(element.to_source() for element in self.elements),)
 
 
 class Call(Expression):
@@ -405,6 +462,37 @@ class Assign(Statement):
 
     def to_source(self, indent_level=0):
         return '%s%s = %s' % (get_indent(indent_level=indent_level), self.name, self.value.to_source())
+
+
+class SetItem(Statement):
+    def __init__(
+            self,
+            container,  # type: StatementContainer
+            expression,  # type: Expression
+            key,  # type: Expression
+            value,  # type: Expression
+    ):
+        Statement.__init__(self, container=container)
+
+        self.expression = expression  # type: Expression
+        self.key = key  # type: Expression
+        self.value = value  # type: Expression
+
+        for ancestor_with_symbol_table in walk_symbol_tables(container):
+            for name_read in value.names_read():
+                ancestor_with_symbol_table.add_name_read(name_read, self)
+
+            for name_read in expression.names_read():
+                ancestor_with_symbol_table.add_name_definition_or_write(name_read, self)
+
+            for name_read in key.names_read():
+                ancestor_with_symbol_table.add_name_read(name_read, self)
+
+            break
+
+    def to_source(self, indent_level=0):  # type: (int) -> str
+        return '%s%s[%s] = %s' % (get_indent(indent_level=indent_level), self.expression.to_source(),
+                                  self.key.to_source(), self.value.to_source())
 
 
 class Import(Statement):
