@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "python-code-builder"
-version = "0.0.1a1"
+version = "0.0.1a2"
 description = "A library for dynamically constructing Python code with strong, explicit scoping and symbol tracking."
 readme = "README.md"
 requires-python = ">=2"

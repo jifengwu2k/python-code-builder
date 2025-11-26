@@ -44,9 +44,9 @@ mod = Module()
 Import(mod, module='math')
 Assign(mod, 'x', Constant(3))
 
-func = Function(mod, name='foo', args=['a'], decorators=[])
+func = Function(mod, name='foo', args=('a',), varargs=None, kwonlyargs=(), varkwargs=None, decorators=())
 Assign(func, 'y', BinaryOperation(LoadName('a'), BinaryOperator.ADD, LoadName('x')))
-loop = For(func, target='item', iterable=Call(LoadName('range'), [Constant(5)], {}))
+loop = For(func, target='item', iterable=Call(LoadName('range'), (Constant(5),), {}))
 Assign(loop, 'y', BinaryOperation(LoadName('y'), BinaryOperator.ADD, LoadName('item')))
 Return(func, value=LoadName('y'))
 
@@ -57,10 +57,10 @@ Producing:
 
 ```
 import math
-x = (3)
+x = 3
 def foo(a)
     y = (a + x)
-    for item in range((5)):
+    for item in range(5):
         y = (y + item)
     return y
 ```
@@ -115,8 +115,8 @@ print(mod.to_source())
 Prints:
 
 ```
-foo = ('ABC')
-bar = ('123')
+foo = 'ABC'
+bar = '123'
 for x in foo:
     pass
 for x in bar:

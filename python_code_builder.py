@@ -3,9 +3,8 @@
 # Licensed under the MIT License. See LICENSE file in the project root for full license information.
 import sys
 from collections import OrderedDict
-from itertools import chain
-
 from enum import Enum
+from itertools import chain
 from typing import Iterable, List, Mapping, MutableMapping, Optional, Sequence, Text, Union
 
 if sys.version_info < (3,):
@@ -264,6 +263,39 @@ class StatementContainer(object):
         self.parent = parent  # type: Optional[StatementContainer]
         self.statements = []  # type: List[Statement]
 
+    def is_name_defined(
+            self,
+            name,  # type: str
+    ):
+        for ancestor_with_symbol_table in walk_symbol_tables(self):
+            if name in ancestor_with_symbol_table.names_to_definitions_and_uses:
+                return True
+
+        return False
+
+    def add_name_read(
+            self,
+            name,  # type: str
+            statement,  # type: Statement
+    ):
+        for ancestor_with_symbol_table in walk_symbol_tables(self):
+            if name in ancestor_with_symbol_table.names_to_definitions_and_uses:
+                ancestor_with_symbol_table.names_to_definitions_and_uses[name].append(NameRead(statement=statement))
+                break
+        else:
+            raise ValueError('Name %s is not defined' % name)
+
+    def add_name_definition_or_write(
+            self,
+            name,  # type: str
+            statement,  # type: Statement
+    ):
+        for ancestor_with_symbol_table in walk_symbol_tables(self):
+            if name in ancestor_with_symbol_table.names_to_definitions_and_uses:
+                ancestor_with_symbol_table.names_to_definitions_and_uses[name].append(NameWrite(statement=statement))
+            else:
+                ancestor_with_symbol_table.names_to_definitions_and_uses[name] = [NameDefinition(statement=statement)]
+
 
 class NameDefinitionOrUse(object):
     def __init__(
@@ -313,38 +345,6 @@ class StatementContainerWithSymbolTable(StatementContainer):
     ):
         StatementContainer.__init__(self, parent=parent)
         self.names_to_definitions_and_uses = OrderedDict()  # type: MutableMapping[str, List[NameDefinitionOrUse]]
-
-    def add_name_definition_or_write(
-            self,
-            name,  # type: str
-            statement,  # type: Statement
-    ):
-        if name in self.names_to_definitions_and_uses:
-            self.names_to_definitions_and_uses[name].append(NameWrite(statement=statement))
-        else:
-            self.names_to_definitions_and_uses[name] = [NameDefinition(statement=statement)]
-
-    def add_name_read(
-            self,
-            name,  # type: str
-            statement,  # type: Statement
-    ):
-        for ancestor_with_symbol_table in walk_symbol_tables(self):
-            if name in ancestor_with_symbol_table.names_to_definitions_and_uses:
-                ancestor_with_symbol_table.names_to_definitions_and_uses[name].append(NameRead(statement=statement))
-                break
-        else:
-            raise ValueError('Name %s is not defined' % name)
-
-    def is_name_defined(
-            self,
-            name,  # type: str
-    ):
-        for ancestor_with_symbol_table in walk_symbol_tables(self):
-            if name in ancestor_with_symbol_table.names_to_definitions_and_uses:
-                return True
-
-        return False
 
 
 def get_indent(indent_level):
@@ -402,6 +402,9 @@ class Function(StatementContainerWithSymbolTable, Statement):
             container,  # type: StatementContainer
             name,  # type: str
             args,  # type: Sequence[str]
+            varargs,  # type: Optional[str]
+            kwonlyargs,  # type: Sequence[str]
+            varkwargs,  # type: Optional[str]
             decorators,  # type: Sequence[Union[LoadName, Call]]
     ):
         StatementContainerWithSymbolTable.__init__(self, parent=container)
@@ -409,6 +412,9 @@ class Function(StatementContainerWithSymbolTable, Statement):
 
         self.name = name  # type: str
         self.args = args  # type: Sequence[str]
+        self.varargs = varargs  # type: Optional[str]
+        self.kwonlyargs = kwonlyargs  # type: Sequence[str]
+        self.varkwargs = varkwargs  # type: Optional[str]
         self.decorators = decorators  # type: Sequence[Union[LoadName, Call]]
 
         for ancestor_with_symbol_table in walk_symbol_tables(container):
@@ -421,6 +427,15 @@ class Function(StatementContainerWithSymbolTable, Statement):
         for arg in args:
             self.add_name_definition_or_write(arg, self)
 
+        if varargs is not None:
+            self.add_name_definition_or_write(varargs, self)
+
+        for kwonlyarg in kwonlyargs:
+            self.add_name_definition_or_write(kwonlyarg, self)
+
+        if varkwargs is not None:
+            self.add_name_definition_or_write(varkwargs, self)
+
     def to_source(self, indent_level=0):  # type: (int) -> str
         decorator_lines = (
             '%s@%s' % (get_indent(indent_level=indent_level), decorator.to_source())
@@ -428,7 +443,71 @@ class Function(StatementContainerWithSymbolTable, Statement):
         )
 
         definition_lines = (
-            '%sdef %s(%s):' % (get_indent(indent_level=indent_level), self.name, ', '.join(self.args)),
+            '%sdef %s(%s):' % (
+                get_indent(indent_level=indent_level),
+                self.name,
+                ', '.join(
+                    chain(
+                        self.args,
+                        (self.varargs,) if self.varargs is not None else (),
+                        self.kwonlyargs,
+                        (self.varkwargs,) if self.varkwargs is not None else (),
+                    )
+                )
+            ),
+        )
+
+        if self.statements:
+            body_lines = (
+                statement.to_source(indent_level=indent_level + 1)
+                for statement in self.statements
+            )
+        else:
+            body_lines = ('%spass' % (get_indent(indent_level=indent_level + 1),),)
+
+        return '\n'.join(chain(decorator_lines, definition_lines, body_lines))
+
+
+class Class(StatementContainerWithSymbolTable, Statement):
+    def __init__(
+            self,
+            container,  # type: StatementContainer
+            name,  # type: str
+            bases,  # type: Sequence[Expression]
+            decorators,  # type: Sequence[Union[LoadName, Call]]
+    ):
+        StatementContainerWithSymbolTable.__init__(self, parent=container)
+        Statement.__init__(self, container=container)
+
+        self.name = name  # type: str
+        self.bases = bases  # type: Sequence[Expression]
+        self.decorators = decorators  # type: Sequence[Union[LoadName, Call]]
+
+        for ancestor_with_symbol_table in walk_symbol_tables(container):
+            for base in bases:
+                for name_read in base.names_read():
+                    ancestor_with_symbol_table.add_name_read(name_read, self)
+
+            for decorator in decorators:
+                for name_read in decorator.names_read():
+                    ancestor_with_symbol_table.add_name_read(name_read, self)
+
+            ancestor_with_symbol_table.add_name_definition_or_write(name, self)
+
+            break
+
+    def to_source(self, indent_level=0):  # type: (int) -> str
+        decorator_lines = (
+            '%s@%s' % (get_indent(indent_level=indent_level), decorator.to_source())
+            for decorator in self.decorators
+        )
+
+        definition_lines = (
+            '%sclass %s(%s):' % (
+                get_indent(indent_level=indent_level),
+                self.name,
+                ', '.join(base.to_source() for base in self.bases)
+            ),
         )
 
         if self.statements:
